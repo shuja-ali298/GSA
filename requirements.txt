@@ -1,0 +1,6 @@
+geopandas>=0.14
+shapely>=2.0
+pyproj>=3.6
+matplotlib>=3.8
+mapclassify>=2.6
+folium>=0.15
