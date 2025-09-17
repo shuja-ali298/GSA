@@ -1,0 +1,419 @@
+---
+title: 'GV330: Seminar 3, Reproducibility -- Tiers 1 and 2'
+author: ""
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setting Up
+
+## Functions
+
+First, we load some re-usable functions for our activity. You can inspect, edit, and add to the functions by opening the relevant .R script. But for now, we can just source them.
+
+```{r functions}
+source("R//functions//functions.R")
+```
+
+Let's now load the necessary libraries for this activity:
+
+```{r libraries}
+Sys.setenv("PROJ_NETWORK"="ON") 
+
+package_check(c("sf", "ggplot2", "tmap", "dplyr", "scales"), groundhog.date = "2025-01-01")
+
+# sf is the simple features package, a modern implementation for handling spatial objects
+# ggplot2 for plotting, but can also handle spatial plotting
+# tmap, an alternative (and better!) way of making maps 
+# dplyr, for data manipulation
+# scales, for formatting scales in visualisations
+```
+
+```{r}
+library(sf)
+library(ggplot2)
+library(tmap)
+library(dplyr)
+library(scales)
+library(leaflet)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(htmlwidgets)
+```
+
+# Acquisition and Ingestion
+
+## Downloading and Loading Data
+
+Now, let's start by using our file_grabber() function to download some data from the London Data Store.
+
+```{r download_data}
+# Download and unzip our chosen shapefiles from the London Data Store
+file_grabber(file_name_dl = "statistical-gis-boundaries-london.zip", 
+             file_name_final = "MSOA_2011_London_gen_MHW.shp", 
+              file_path = "/Users/shujaali/gv330_2425/Seminars/seminar5_spatialData/data/", 
+             url = "https://data.london.gov.uk/download/statistical-gis-boundary-files-london/9ba8c833-6370-4b11-abdc-314aa020d5e0",
+             compressed = TRUE)
+```
+
+Now that we have downloaded the data, let's load it into R using the `sf` package. Here will we not focus on functional programming, so that we can inspect our objects manually and learn about them.
+
+When handling spatial data, we need to be especially attuned to the coordinate reference system (CRS) of the data. This is because the CRS determines how the data, which are actually in three dimensions, is projected onto a 2D plane. If you just work with one shapefile the CRS isn't so important (though it will change what any map you render looks like), but the moment you combine multiple spatial data sources, you need to make sure they are in the same CRS or you can accidentally end up with data that is misaligned.
+
+```{r load_data}
+# Read the shapefile
+shapefile_name <- "MSOA_2011_London_gen_MHW.shp"
+london_msoa_2011 <- st_read(paste0("data/shapefiles/statistical-gis-boundaries-london/ESRI/",shapefile_name))
+
+# Look at the data -- note, it doesn't look like a regular tibble or data frame, there is other info there. 
+london_msoa_2011
+
+# It turns out that some (just 4) of the polygons are not valid (i.e., they don't join up properly).
+sum(!st_is_valid(london_msoa_2011)) # check if any issues? 4 exist
+london_msoa_2011 <- st_make_valid(london_msoa_2011) # correct them
+sum(!st_is_valid(london_msoa_2011)) # check again?
+
+# Make a very boring map - behold, this is London!
+plot(london_msoa_2011$geometry)
+
+# Set a global variable that will be our project CRS, based on the London shapefile crs
+proj_crs <- st_crs(london_msoa_2011)
+proj_crs$input
+```
+
+# Mapping: Fundamentals
+
+## Mapping MSOA -- Choropleths
+
+Let's start by making a very simple map of population density by MSOA. For this, a choropleth map is a good choice as the variable. That is because the variable we are going to map is scaled **by area** and thus invariant to the visual area of the unit we are mapping. We'll do this two ways, first using ggplot2, and then using tmap.
+
+```{r ggplot2_choropleth}
+# Using ggplot2 -- note, ggplot2 maps are by default quite visually noisy, so we remove a lot of that using theme_void()
+choropleth_map_gg <- 
+  ggplot() + 
+    geom_sf(data = london_msoa_2011, aes(fill = POPDEN), colour = "gray30") + # Choropleth map with POPDEN variable
+    ggtitle("Population Density in London MSOAs") + 
+    scale_fill_viridis_c(name = "Population Density", labels = scales::comma) + # Choose a viridis colour scale
+    theme_void() + # Use theme_void() for minimalist style
+    theme(plot.margin = unit(c(0.2, 0.2, 0.2, 0.2), "cm")) + # Reduce margins a bit
+    labs(fill = "Population Density") # Customize legend title
+
+choropleth_map_gg
+
+# We can easily save ggplot map output:
+ggsave("output/choropleth_map_gg.pdf", choropleth_map_gg, width = 9, height = 6)
+
+```
+
+Now let's use tmap:
+
+```{r tmap_choropleth}
+# The same map using tmap, which defaults to a much cleaner presentation, so we don't have to do too much (just switch off the frame):
+choropleth_map_tm <- 
+  tm_shape(london_msoa_2011) +
+    tm_fill(col = "POPDEN", title = "Population Density", style = "cont", palette = "viridis") +
+    tm_borders(col = "gray30") +
+    tm_layout(title = "Population Density in London MSOAs", inner.margins = c(0.1, 0.1, 0.1, 0.1), frame = FALSE)
+
+choropleth_map_tm
+
+# We can also easily save ggplot map output:
+tmap_save(choropleth_map_tm, "output/choropleth_map_tm.pdf", width = 9, height = 6)
+```
+
+## Mapping MSOA -- Scaled Points
+
+Choropleth maps are good for area-invariant metrics, but what if we want to map something like absolute population (not density)? Let's quickly see what happens...
+
+```{r tmap_bad_choropleth}
+tm_shape(london_msoa_2011) +
+  tm_fill(col = "USUALRES", title = "Usual Residents", style = "cont", palette = "viridis") +
+  tm_borders(col = "gray30") +
+  tm_layout(title = "Usual Residents in London MSOAs", inner.margins = c(0.1, 0.1, 0.1, 0.1), frame = FALSE)
+
+```
+
+This becomes visually confusing -- the colors (which give us an absolute unscaled metric) don't make sense, given what we know (or at least expect) about London's population distribution. What's going on? Well, the **magnitude** of the variable is not invariant to the **area** of the unit we are mapping. Central parts of London will have very high population counts, but also very small areas.
+
+An alternative approach would be scaled points. This is a good choice when you want to show the absolute magnitude of a variable, but you don't want the visual area of the unit to distort the visual representation.
+
+```{r scaled_points}
+# First, pick out the centroids of the MSOAs, creating a new object
+centroids <- st_centroid(london_msoa_2011)
+
+# Second, plot both the polygon (for reference) and the points, scaled to USUALRES. Here, with ggplot:
+scaled_points_map_gg <- 
+  ggplot() + 
+    geom_sf(data = london_msoa_2011, fill = "transparent", color = "gray30", alpha = 0.7) + # Outline of MSOAs for reference
+    geom_sf(data = centroids, aes(size = USUALRES), color = "blue", alpha = 0.5) + # Points at centroids, size scaled to USUALRES by aes()
+    scale_size_continuous(name = "Usual Residents", range = c(0.1, 3), breaks = scales::breaks_pretty(n = 5)) + # Use range to set lower and upper limits of point size
+    ggtitle("Population by MSOA in London") + 
+    theme_void() + # Use theme_void() for minimalist style
+    theme(plot.margin = unit(c(0.2, 0.2, 0.2, 0.2), "cm"))  # Reduce margins a bit
+
+scaled_points_map_gg
+
+ggsave("output/scaled_points_map_gg.pdf", scaled_points_map_gg, width = 9, height = 6)
+
+scaled_points_map_tm <- 
+  tm_shape(london_msoa_2011) + # Layer 1 is the msoa polygon
+    tm_borders(col = "gray30") + # Outline of MSOAs
+  tm_shape(centroids) + # Layer 2 is the centroids. Note how this works differently to ggplot. We go tm_shap() for the shapefile, then add grammar below.
+  tm_bubbles(size = "USUALRES", col = "blue", style = "pretty", alpha = 0.5, title.size = "Usual Residents", scale = 0.6) + # Points at centroids, size scaled to USUALRES
+  tm_layout(title = "Population by MSOA in London", inner.margins = c(0.1, 0.1, 0.1, 0.1), frame = FALSE)  # Set map title
+
+scaled_points_map_tm
+
+tmap_save(scaled_points_map_tm, "output/scaled_points_map_tm.pdf", width = 9, height = 6)
+```
+
+# Applied Example: Rapid Charging Points
+
+## Acquisition, Ingestion, Transformation for Rapid Chargers
+
+```{r rapid_chargers_acquisition_ingestion}
+# Download the data from the London Datastore. We can re-use our function:
+file_grabber(file_name_dl = "Rapid_charging_points.gpkg", # this is a .gpkg geo-package, not a .shp shapefile
+             file_path = "data/", 
+             url = "https://data.london.gov.uk/download/electric_vehicle_charging_site/8ef9c743-c01d-4329-8239-8f858ff4de53",
+             compressed = FALSE)
+
+# Ingest rapid charging points data
+rapid_chargers <- st_read("data/Rapid_charging_points.gpkg")
+
+rapid_chargers
+```
+
+Now let's transform and manipulate our data:
+
+```{r rapid_chargers_transformation}
+# Set the CRS of the main polygon shapefile (we do not re-project here)
+rapid_chargers <- rapid_chargers |>
+  st_set_crs(proj_crs) 
+
+# For interest, what if we want to find out which MSOA each charger is in? 
+# Create a new object that conducts a spatial join the rapid chargers data to the shapefile by MSOA name. We use join = st_intersects. 
+rapid_chargers_MSOA <- st_join(rapid_chargers, london_msoa_2011, join = st_intersects)
+
+# Check that we haven't lost or duped rows -- don't skip this step!
+nrow(rapid_chargers_MSOA) == nrow(rapid_chargers) 
+
+# Note: What if we joined the other way? This is the Bad Place!
+bad_join <- st_join(london_msoa_2011, rapid_chargers, join = st_intersects)
+nrow(bad_join) == nrow(london_msoa_2011)
+
+# What if instead we wanted to count the number of chargers in each MSOA? And then create a binary indicator for presence of at least one?
+london_msoa_2011_counts <- london_msoa_2011 |> 
+  transform(charger_count = lengths(st_intersects(london_msoa_2011, rapid_chargers))) |>
+  transform(has_charger = ifelse(charger_count>0,"Yes","No"))
+
+# Check the join:
+nrow(london_msoa_2011_counts) == nrow(london_msoa_2011) 
+```
+
+## Visualisation of Rapid Chargers
+
+```{r rapid_chargers_visualisation}
+# Plot charging stations and London boundaries together using ggplot2, diff colours by number of charge points
+rapid_chargers_gg <- 
+  ggplot() + 
+    geom_sf(data = london_msoa_2011, fill = "transparent", color = "gray30") + # Outline of MSOAs for reference
+    geom_sf(data = rapid_chargers, aes(color = numberrcpoints), size = 3, alpha = .8) +
+    ggtitle("Rapid Charging Stations in London") + 
+    theme_void() + # Use theme_void() for minimalist style
+    theme(plot.margin = unit(c(0.2, 0.2, 0.2, 0.2), "cm")) +  # Reduce margins a bit
+    labs(color = "Number of Charge Points")  # Relabel the legend
+
+rapid_chargers_gg
+
+# Plot charging stations and London boundaries together using tmap, diff colours by number of charge points
+rapid_chargers_tm <- 
+  tm_shape(london_msoa_2011) +
+    tm_borders(col = "gray30") + # Outline of MSOAs
+  tm_shape(rapid_chargers) +
+    tm_dots(col = "numberrcpoints", title = "Number of Charge Points", scale = 4, alpha = .8) + # Adjust dot size
+  tm_layout(title = "Rapid Charging Stations in London", frame = FALSE) # Set map title
+
+rapid_chargers_tm
+
+# Choropleth plot where MSOAs with at least 1 charger are highlighted:
+rapid_chargers_choro_gg <- 
+  ggplot() + 
+  geom_sf(data = london_msoa_2011_counts, aes(fill = has_charger), color = "gray30") +
+  theme_void() + # Use theme_void() for minimalist style
+  theme(plot.margin = unit(c(0.2, 0.2, 0.2, 0.2), "cm")) + # Reduce margins a bit
+  labs(fill = "Charger Present?") + # Customize legend title
+  ggtitle("Rapid Charging Coverage in London")
+
+rapid_chargers_choro_gg
+
+# And again, in tmap:
+rapid_chargers_choro_tm <- 
+  tm_shape(london_msoa_2011_counts) +
+  tm_borders(col = "gray30") +
+  tm_fill(col = "has_charger", title = "Charger Present?") +
+  tm_layout(title = "Rapid Charging Coverage in London", inner.margins = c(0.1, 0.1, 0.1, 0.1), frame = FALSE)  # Set map title
+
+rapid_chargers_choro_tm
+```
+
+# Applied Example: Schools Data
+Let's try a more challenging case: a dataset of points that is not yet a spatial object (just a .csv).
+
+## Acquisition and Ingestion - Schools
+
+```{r schools_acquisition_ingestion}
+file_grabber(file_name_dl = "all_schools_xy_2016.csv", 
+             file_path = "data/", 
+             url = "https://data.london.gov.uk/download/london-schools-atlas/57046151-39a0-45d9-8dc0-27ea7fd02de8",
+             compressed = FALSE)
+
+# Load schools data
+schools <- read.csv("data/all_schools_xy_2016.csv")
+```
+
+We have to be a little careful here, as the chosen project crs (declared above) happens to convert our x and y into metres, rather than using lat/long. We have to take two steps here -- first, we identify coordinates in our data frame and apply a CRS ('4326'), making this an sf object. We then project it into the projected CRS. We didn't have to do this two-step procedure with rapid chargers as that was **already** a spatial object.
+
+```{r schools_transformation}
+schools_sf <- schools |>
+  st_as_sf(coords = c("x", "y"), crs = 4326) |>
+  st_transform(proj_crs)
+
+schools_sf
+
+# Let's do a quick bit of data munging with this dataset: 
+# First, let's create a new variable that focuses in on just the four most common types of schools
+schools_sf <- schools_sf |>
+  transform(TYPE_REDUCED = ifelse(TYPE %in% c('Academy Converter', 'Community School', 'Other Independent School', 'Voluntary Aided School'), TYPE, NA))
+
+# Quick check
+table(schools_sf$TYPE_REDUCED)
+
+# Second, let's fix an absolutely hilarious excel error in the data.
+# Excel has taken the variable AGE (which gives the school age range) and interpreted it as a date.
+# I.e., cases where the school is 11-19 years, are reported as 19-Nov in the data! Fortunately, we can reverse engineer the right data...
+
+# First, find those cases where this has gone wrong by doing a string search for any of the months (month.abb is build into base R), and create a dummy variable:
+
+# extract all second parts of the age string:
+parts <- strsplit(schools_sf$AGE,"-")
+
+
+schools_sf <- schools_sf |>
+  transform(AGE_MAX = as.numeric(sapply(schools_sf$AGE, function(date_string) { # Extract the max age as the first item before the -
+    date_parts <- strsplit(date_string, "-")
+    return(date_parts[[1]][1])
+  }))) |>
+  transform(AGE_MIN = sapply(schools_sf$AGE, function(date_string) { # Extract the min age (which is often incorrectly reported as a month) as the item after the -
+    date_parts <- strsplit(date_string, "-")
+    return(date_parts[[1]][2])
+  })) |>
+  transform(AGE_CORRUPTED = ifelse(AGE_MIN %in% month.abb, 1, 0))
+
+# Extract numeric values that are still present in AGE_MIN (there are some that excel didn't corrupt)
+numeric_values <- schools_sf$AGE_MIN[!schools_sf$AGE_MIN %in% month.abb]
+
+# Define a mapping between month names and their corresponding true numeric values
+month_mapping <- c("Jan" = 1, "Feb" = 2, "Mar" = 3, "Apr" = 4, "May" = 5, "Jun" = 6,
+                   "Jul" = 7, "Aug" = 8, "Sep" = 9, "Oct" = 10, "Nov" = 11, "Dec" = 12)
+
+# Add the numeric values we extracted to the mapping
+month_mapping <- c(month_mapping, setNames(numeric_values, as.character(numeric_values)))
+
+# Use the mapping to convert month names and numeric values to final numeric values
+schools_sf$AGE_MIN <- month_mapping[as.character(schools_sf$AGE_MIN)]
+
+# Create age range variable, and remove excess white space:
+schools_sf <- schools_sf |>
+  transform(AGE_RANGE = ifelse(AGE_CORRUPTED == 1, paste0(AGE_MIN, "-", AGE_MAX), AGE)) |>
+  transform(AGE_RANGE = gsub(" ", "", AGE_RANGE, fixed = TRUE))
+
+# Quick check
+table(schools_sf$AGE_RANGE)
+
+```
+
+## Static Visualisation of Schools
+
+Let's quickly make a static map of the schools. We can improve our previous mapping by adding a bit of jazz to our presentation...
+
+```{r schools_static_visualisation}
+
+# Plot schools data using ggplot2 
+schools_plot_gg <- 
+  ggplot() + 
+    geom_sf(data = london_msoa_2011, fill = "transparent", color = "gray30") + # Set fill to transparent and color to black
+    geom_sf(data = schools_sf, shape = 19, aes(color = TYPE_REDUCED), alpha = .5, size = 1) + 
+    ggtitle("Schools Locations in London") + 
+    coord_sf() +
+    theme_void() + 
+    theme(plot.margin = unit(c(0.2, 0.2, 0.2, 0.2), "cm")) + 
+    labs(color = "School Type")  # Relabel the legend
+
+schools_plot_gg
+
+# The same map using tmap
+schools_plot_tm <-
+  tm_shape(london_msoa_2011) +
+    tm_borders(col = "gray30") +
+    tm_shape(schools_sf) +
+    tm_dots(shape = 19, col = "TYPE_REDUCED", title = "School Type", alpha = 0.5, scale = 2.5) +
+    tm_layout(title = "Schools Locations in London", inner.margins = c(0.1, 0.1, 0.1, 0.1), frame = FALSE)
+
+schools_plot_tm
+
+# We can always jazz up the above maps a little, for example, using tmap:
+schools_plot_jazz_tm <- 
+  tm_shape(london_msoa_2011) +
+    tm_fill(alpha = 0.1, fill = "gray60") +
+    tm_borders(col= 'white') +
+  tm_shape(schools_sf) +
+    tm_dots(shape = 19, col = "TYPE_REDUCED", title = "School Type", alpha = 0.5, scale = 2.5) +
+  tm_layout(title = "Schools Locations in London",  
+              title.color = 'white',
+              legend.text.color = 'white',
+              legend.title.color = 'white',
+              inner.margins = c(0.1, 0.1, 0.1, 0.1), frame = FALSE, bg.color = 'gray10')
+
+schools_plot_jazz_tm
+```
+
+## Dynamic Visualisation of Schools
+
+Finally, let's make a dynamic/interactive map. This is going to allow us to actually move around the map, zoom in, zoom out, click on individual data points and see their data, etc.
+
+```{r schools_dynamic_visualisation}
+# Let's create an interactive map with a basemap, again using tmap: 
+# First, set the tmap_mode to viewing:
+library(tmap)
+library(sf)
+
+tmap_mode('view')
+
+# Second, create the interactive map:
+schools_plot_interactive <-
+  tm_shape(london_msoa_2011) +
+  tm_borders() +
+  tm_shape(schools_sf) +
+  tm_dots(shape = 19, col = "TYPE_REDUCED", title = "School Type", alpha = 0.5, scale = 2.5, 
+          id = "SCHOOL_NAM", # the scroll-over name
+          popup.vars = c("AGE_RANGE", "GENDER", "STATUS", "WARD_NAME")) + # variables when you click -- note the hilarious excel error in AGE
+  tm_layout(title = "Schools Locations in London", inner.margins = c(0.1, 0.1, 0.1, 0.1), frame = FALSE) +
+  tm_basemap(c('OpenStreetMap'))
+
+schools_plot_interactive
+
+# We can save it as an .html file:
+# You can also take a static image using mapshot()
+tmap_save(schools_plot_interactive, "output/schools_plot_dynamic.html") 
+
+# Revert to plotting mode
+tmap_mode('plot')
+
+```
+
+
